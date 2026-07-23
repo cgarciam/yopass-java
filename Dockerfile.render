@@ -1,0 +1,27 @@
+# Dockerfile for yopass-java on Render.com (FREE TIER — single container)
+# Bundles yopass-java + Memcached in one container.
+# Render handles external TLS termination automatically (condition #1: HTTPS ✅).
+# Memcached listens only on 127.0.0.1 (condition #2: private network ✅).
+
+# ── Build stage: compile fat JAR ──
+FROM maven:3.9-eclipse-temurin-11 AS build
+WORKDIR /app
+COPY pom.xml .
+# Download dependencies first (cacheable layer)
+RUN mvn dependency:go-offline -q
+COPY src ./src
+RUN mvn clean package -DskipTests -q
+
+# ── Runtime: all-in-one (yopass-java + Memcached) ──
+FROM eclipse-temurin:11-jre-alpine
+
+RUN apk add --no-cache memcached su-exec && \
+    adduser -D -H -u 1337 yopass
+
+COPY --from=build /app/target/yopass-java-1.0.0.jar /app/yopass-java.jar
+COPY entrypoint-render.sh /entrypoint-render.sh
+RUN chmod +x /entrypoint-render.sh
+
+EXPOSE 10000
+
+ENTRYPOINT ["/entrypoint-render.sh"]

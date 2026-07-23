@@ -1,0 +1,28 @@
+# Render Blueprint — FREE TIER (single container, $0/month)
+# All services (yopass-java + Memcached) run in one container.
+# Trade-off: spins down after 15 min of inactivity; cold start ~30s.
+#
+# Security conditions:
+#   1. HTTPS: Render terminates TLS at their edge (automatic, free).
+#   2. Memcached: bound to 127.0.0.1 inside the container (not exposed).
+#   3. Logs: only visible in Render dashboard (not shared with third parties).
+#
+# Deploy: connect your repo to Render and it auto-detects this file.
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: yopass-java
+    runtime: docker
+    dockerfilePath: ./Dockerfile.render
+    dockerContext: .
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: YP_MEMCACHED
+        value: "localhost:11211"
+      # Uncomment to restrict access by IP (comma-separated CIDRs):
+      # - key: ALLOWED_IPS
+      #   value: "203.0.113.0/24,198.51.100.5/32"

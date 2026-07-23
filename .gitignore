@@ -1,2 +1,9 @@
 .idea
 *.iml
+/target/
+/backup/
+/logs/
+/.classpath
+/.project
+.settings/
+dependency-reduced-pom.xml
