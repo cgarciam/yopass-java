@@ -1,147 +1,143 @@
 'use strict';
 
-let app = angular.module('yopass', ['ngRoute']);
+const app = angular.module('yopass', ['ngRoute']);
 
 /**
  * Client-side encryption using Web Crypto API (AES-GCM 256-bit).
  * The server never sees the plaintext or the encryption key.
  */
-let Crypto = {
-    /**
-     * Generates a random encryption key and returns it as a URL-safe base64 string.
-     */
-    generateKey: async function() {
-        let key = await window.crypto.subtle.generateKey(
-            { name: 'AES-GCM', length: 256 },
-            true,
-            ['encrypt', 'decrypt']
-        );
-        let exported = await window.crypto.subtle.exportKey('raw', key);
-        return { cryptoKey: key, keyString: Crypto._arrayBufferToBase64Url(exported) };
-    },
+const Crypto = (() => {
+    const ALGORITHM = 'AES-GCM';
+    const KEY_LENGTH = 256;
+    const IV_LENGTH = 12;
 
-    /**
-     * Encrypts plaintext with the given CryptoKey. Returns base64url(iv + ciphertext).
-     */
-    encrypt: async function(cryptoKey, plaintext) {
-        let iv = window.crypto.getRandomValues(new Uint8Array(12));
-        let encoded = new TextEncoder().encode(plaintext);
-        let ciphertext = await window.crypto.subtle.encrypt(
-            { name: 'AES-GCM', iv: iv },
-            cryptoKey,
-            encoded
-        );
-        // Prepend IV to ciphertext
-        let combined = new Uint8Array(iv.length + ciphertext.byteLength);
-        combined.set(iv, 0);
-        combined.set(new Uint8Array(ciphertext), iv.length);
-        return Crypto._arrayBufferToBase64Url(combined.buffer);
-    },
-
-    /**
-     * Decrypts ciphertext (base64url encoded with prepended IV) using the given key string.
-     */
-    decrypt: async function(keyString, ciphertextB64) {
-        let rawKey = Crypto._base64UrlToArrayBuffer(keyString);
-        let cryptoKey = await window.crypto.subtle.importKey(
-            'raw', rawKey,
-            { name: 'AES-GCM', length: 256 },
-            false,
-            ['decrypt']
-        );
-        let combined = new Uint8Array(Crypto._base64UrlToArrayBuffer(ciphertextB64));
-        let iv = combined.slice(0, 12);
-        let ciphertext = combined.slice(12);
-        let decrypted = await window.crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: iv },
-            cryptoKey,
-            ciphertext
-        );
-        return new TextDecoder().decode(decrypted);
-    },
-
-    _arrayBufferToBase64Url: function(buffer) {
-        let bytes = new Uint8Array(buffer);
+    function arrayBufferToBase64Url(buffer) {
+        const bytes = new Uint8Array(buffer);
         let binary = '';
         for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
+            binary += String.fromCodePoint(bytes[i]);
         }
         return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    },
+    }
 
-    _base64UrlToArrayBuffer: function(base64url) {
+    function base64UrlToArrayBuffer(base64url) {
         let base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
         while (base64.length % 4 !== 0) { base64 += '='; }
-        let binary = atob(base64);
-        let buffer = new Uint8Array(binary.length);
+        const binary = atob(base64);
+        const buffer = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
-            buffer[i] = binary.charCodeAt(i);
+            buffer[i] = binary.codePointAt(i);
         }
         return buffer.buffer;
     }
-};
+
+    async function importKey(keyString) {
+        return window.crypto.subtle.importKey(
+            'raw',
+            base64UrlToArrayBuffer(keyString),
+            { name: ALGORITHM, length: KEY_LENGTH },
+            false,
+            ['decrypt']
+        );
+    }
+
+    return {
+        /** Generates a random encryption key and returns it as a URL-safe base64 string. */
+        async generateKey() {
+            const key = await window.crypto.subtle.generateKey(
+                { name: ALGORITHM, length: KEY_LENGTH },
+                true,
+                ['encrypt', 'decrypt']
+            );
+            const exported = await window.crypto.subtle.exportKey('raw', key);
+            return { cryptoKey: key, keyString: arrayBufferToBase64Url(exported) };
+        },
+
+        /** Encrypts plaintext with the given CryptoKey. Returns base64url(iv + ciphertext). */
+        async encrypt(cryptoKey, plaintext) {
+            const iv = window.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+            const encoded = new TextEncoder().encode(plaintext);
+            const ciphertext = await window.crypto.subtle.encrypt(
+                { name: ALGORITHM, iv },
+                cryptoKey,
+                encoded
+            );
+            const combined = new Uint8Array(IV_LENGTH + ciphertext.byteLength);
+            combined.set(iv, 0);
+            combined.set(new Uint8Array(ciphertext), IV_LENGTH);
+            return arrayBufferToBase64Url(combined.buffer);
+        },
+
+        /** Decrypts ciphertext (base64url encoded with prepended IV) using the given key string. */
+        async decrypt(keyString, ciphertextB64) {
+            const cryptoKey = await importKey(keyString);
+            const combined = new Uint8Array(base64UrlToArrayBuffer(ciphertextB64));
+            const iv = combined.slice(0, IV_LENGTH);
+            const ciphertext = combined.slice(IV_LENGTH);
+            const decrypted = await window.crypto.subtle.decrypt(
+                { name: ALGORITHM, iv },
+                cryptoKey,
+                ciphertext
+            );
+            return new TextDecoder().decode(decrypted);
+        }
+    };
+})();
 
 app.controller('createController', function($scope, $http) {
     $scope.toggleoptions = function() {
         $scope.options = true;
     };
 
-    $scope.save = function(s) {
-        if (!s || !s.secret) {
+    $scope.save = async function(s) {
+        if (!s?.secret) {
             $scope.error = 'Please enter a secret';
             return;
         }
 
-        Crypto.generateKey().then(function(keyData) {
-            return Crypto.encrypt(keyData.cryptoKey, s.secret).then(function(encrypted) {
-                return { keyString: keyData.keyString, encrypted: encrypted };
+        try {
+            const { cryptoKey, keyString } = await Crypto.generateKey();
+            const encrypted = await Crypto.encrypt(cryptoKey, s.secret);
+
+            const response = await $http.post('/v1/secret', {
+                secret: encrypted,
+                lifetime: s.lifetime || '1h'
             });
-        }).then(function(result) {
-            $http.post('/v1/secret', { secret: result.encrypted, lifetime: s.lifetime || '1h' })
-                .then(function(response) {
-                    let data = response.data;
-                    $scope.error = false;
-                    let base_url = window.location.protocol + '//' + window.location.host + '/#/s/';
-                    $scope.secret = null;
-                    $scope.short_url = base_url + data.key;
-                    $scope.decryption_key = result.keyString;
-                }, function(response) {
-                    $scope.error = response.data ? response.data.message : 'Failed to store secret';
-                });
-        }).catch(function(err) {
-            $scope.$apply(function() {
-                $scope.error = 'Encryption failed: ' + err.message;
-            });
-        });
+
+            const baseUrl = window.location.protocol + '//' + window.location.host + '/#/s/';
+            $scope.error = false;
+            $scope.secret = null;
+            $scope.short_url = baseUrl + response.data.key;
+            $scope.decryption_key = keyString;
+        } catch (err) {
+            $scope.error = (err.data?.message) || err.message || 'Failed to store secret';
+        }
+
+        $scope.$applyAsync();
     };
 });
 
 app.controller('ViewController', function($scope, $routeParams, $http) {
-    function getSecret(key, decryptionKey) {
-        $http.get('/v1/secret/' + key)
-            .then(function(response) {
-                let data = response.data;
-                // Decrypt client-side
-                Crypto.decrypt(decryptionKey, data.secret).then(function(plaintext) {
-                    $scope.$apply(function() {
-                        $scope.errorMessage = false;
-                        $scope.invalidPassword = false;
-                        $scope.secret = plaintext;
-                    });
-                }).catch(function() {
-                    $scope.$apply(function() {
-                        $scope.invalidPassword = true;
-                        $scope.secret = null;
-                    });
-                });
-            }, function(response) {
-                if (response.status === 404) {
-                    $scope.errorMessage = true;
-                    $scope.display_form = false;
-                } else {
-                    $scope.errorMessage = true;
-                }
-            });
+    async function getSecret(key, decryptionKey) {
+        try {
+            const response = await $http.get('/v1/secret/' + key);
+            const plaintext = await Crypto.decrypt(decryptionKey, response.data.secret);
+            $scope.errorMessage = false;
+            $scope.invalidPassword = false;
+            $scope.secret = plaintext;
+        } catch (err) {
+            if (err?.status === 404) {
+                $scope.errorMessage = true;
+                $scope.display_form = false;
+            } else if (err?.status) {
+                $scope.errorMessage = true;
+            } else {
+                // Decryption failure
+                $scope.invalidPassword = true;
+                $scope.secret = null;
+            }
+        }
+        $scope.$applyAsync();
     }
 
     if ($routeParams.decryption_key) {
