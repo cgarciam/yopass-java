@@ -120,7 +120,8 @@ public class Yopass {
             res.header("X-XSS-Protection", "1; mode=block");
             res.header("Referrer-Policy", "no-referrer");
             res.header("Content-Security-Policy",
-                    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'");
+                    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'");
+            res.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
             res.header("Cache-Control", "no-store, no-cache, must-revalidate, private");
             res.header("Pragma", "no-cache");
             res.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
@@ -210,8 +211,8 @@ public class Yopass {
         get("/v1/secret/:key", (request, response) -> {
             final String key = request.params(":key");
 
-            // Validate key format
-            if (key == null || key.length() != KEY_LENGTH) {
+            // Validate key format (must be exactly KEY_LENGTH alphanumeric characters)
+            if (key == null || key.length() != KEY_LENGTH || !key.matches("^[A-Za-z0-9]+$")) {
                 halt(400, new JSONObject().put(MESSAGE, "Invalid key format").toString());
                 return null;
             }

@@ -95,6 +95,12 @@ app.controller('createController', function($scope, $http) {
             return;
         }
 
+        // Enforce maximum plaintext length before encryption
+        if (s.secret.length > 10000) {
+            $scope.error = 'Secret is too long (max 10,000 characters)';
+            return;
+        }
+
         try {
             const { cryptoKey, keyString } = await Crypto.generateKey();
             const encrypted = await Crypto.encrypt(cryptoKey, s.secret);
@@ -104,10 +110,16 @@ app.controller('createController', function($scope, $http) {
                 lifetime: s.lifetime || '1h'
             });
 
+            // Validate that the returned key is alphanumeric to prevent injection
+            const serverKey = response.data.key;
+            if (!/^[A-Za-z0-9]+$/.test(serverKey)) {
+                throw new Error('Invalid key received from server');
+            }
+
             const baseUrl = window.location.protocol + '//' + window.location.host + '/#/s/';
             $scope.error = false;
             $scope.secret = null;
-            $scope.short_url = baseUrl + response.data.key;
+            $scope.short_url = baseUrl + encodeURIComponent(serverKey);
             $scope.decryption_key = keyString;
         } catch (err) {
             $scope.error = (err.data?.message) || err.message || 'Failed to store secret';
@@ -118,9 +130,18 @@ app.controller('createController', function($scope, $http) {
 });
 
 app.controller('ViewController', function($scope, $routeParams, $http) {
+    // Validate route parameters to prevent injection
+    const keyPattern = /^[A-Za-z0-9]+$/;
+
     async function getSecret(key, decryptionKey) {
+        if (!keyPattern.test(key)) {
+            $scope.errorMessage = true;
+            $scope.$applyAsync();
+            return;
+        }
+
         try {
-            const response = await $http.get('/v1/secret/' + key);
+            const response = await $http.get('/v1/secret/' + encodeURIComponent(key));
             const plaintext = await Crypto.decrypt(decryptionKey, response.data.secret);
             $scope.errorMessage = false;
             $scope.invalidPassword = false;
