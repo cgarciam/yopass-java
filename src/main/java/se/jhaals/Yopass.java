@@ -6,6 +6,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import spark.Request;
 
 import java.io.UncheckedIOException;
 import java.security.SecureRandom;
@@ -16,7 +17,7 @@ import java.util.Map;
  * encrypted client-side (Web Crypto API AES-GCM) before being sent to the
  * server. The server never sees plaintext secrets or decryption keys.
  */
-//@SuppressWarnings({ "PMD.GuardLogStatement" })
+//@SuppressWarnings({ "PMD.CommentSize", "PMD.OnlyOneReturn", "PMD.GuardLogStatement" })
 public class Yopass {
     /** Content type for JSON responses. */
     private static final String APPLICATION_JSON = "application/json";
@@ -75,7 +76,7 @@ public class Yopass {
     }
 
     /** Main method to start the Yopass server. */
-//    @SuppressWarnings({"PMD.OnlyOneReturn", "PMD.CognitiveComplexity"})
+//    @SuppressWarnings({"PMD.CognitiveComplexity"})
     public static void main(final String... args) {
         final String portEnv;
         try {
@@ -127,7 +128,7 @@ public class Yopass {
         });
 
         before("/v1/*", (req, res) -> {
-            if (!rateLimiter.allowRequest(req.ip())) {
+            if (!rateLimiter.allowRequest(getClientIp(req))) {
                 halt(429, new JSONObject().put(MESSAGE, "Too many requests").toString());
             }
         });
@@ -249,6 +250,30 @@ public class Yopass {
             port(portNumber);
         }
         return portEnv;
+    }
+
+    /**
+     * Extracts the real client IP address from the request.
+     * When running behind a reverse proxy (e.g., Render, Nginx), the actual
+     * client IP is in the {@code X-Forwarded-For} header. The leftmost value
+     * is the original client; subsequent entries are intermediate proxies.
+     * Falls back to {@code req.ip()} when the header is absent.
+     *
+     * @param req the Spark request
+     * @return the resolved client IP address
+     */
+    private static String getClientIp(final Request req) {
+        final String forwarded = req.headers("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isEmpty()) {
+            // X-Forwarded-For: client, proxy1, proxy2
+            // Take only the leftmost (original client) IP and trim whitespace
+            final int comma = forwarded.indexOf(',');
+            final String clientIp = (comma > 0 ? forwarded.substring(0, comma) : forwarded).trim();
+            if (!clientIp.isEmpty()) {
+                return clientIp;
+            }
+        }
+        return req.ip();
     }
 
 }
