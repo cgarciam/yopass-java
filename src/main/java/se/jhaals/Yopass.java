@@ -16,40 +16,28 @@ import java.util.Map;
  * encrypted client-side (Web Crypto API AES-GCM) before being sent to the
  * server. The server never sees plaintext secrets or decryption keys.
  */
-//@SuppressWarnings({ "PMD.AvoidCatchingGenericException", "PMD.GuardLogStatement", "PMD.UseUtilityClass" })
+//@SuppressWarnings({ "PMD.GuardLogStatement" })
 public class Yopass {
-    /**
-     * Content type for JSON responses.
-     */
+    /** Content type for JSON responses. */
     private static final String APPLICATION_JSON = "application/json";
-    /**
-     * Key used in JSON responses for messages.
-     */
+    /** Key used in JSON responses for messages. */
     private static final String MESSAGE = "message";
-    /**
-     * Logger for Yopass class.
-     */
+    /** Logger for Yopass class. */
     private static final Logger LOG = LoggerFactory.getLogger(Yopass.class);
-    /**
-     * Length of the generated key for storing secrets.
-     */
+    /** Length of the generated key for storing secrets. */
     public static final int KEY_LENGTH = 22;
-    /**
-     * Maximum allowed length for the encrypted secret (ciphertext).
-     */
+    /** Maximum allowed length for the encrypted secret (ciphertext). */
     public static final int SECRET_MAX_LENGTH = 100_000;
-    /**
-     * Maximum allowed size for the request body.
-     */
+    /** Maximum allowed size for the request body. */
     private static final int MAX_BODY_SIZE = 150_000;
-    /**
-     * SecureRandom instance for generating cryptographically secure random values.
-     */
+    /** SecureRandom instance for generating cryptographically secure random values. */
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-    /**
-     * Alphanumeric characters used for generating random keys.
-     */
+    /** Alphanumeric characters used for generating random keys. */
     private static final String ALPHANUMERIC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    /** Minimum valid TCP port number. */
+    private static final int MIN_PORT = 1;
+    /** Maximum valid TCP port number. */
+    private static final int MAX_PORT = 65_535;
 
     /**
      * Map of lifetime strings to their corresponding TTL in seconds.
@@ -86,11 +74,17 @@ public class Yopass {
         return sRandom.toString();
     }
 
-    /**
-     * Main method to start the Yopass server.
-     */
+    /** Main method to start the Yopass server. */
+//    @SuppressWarnings({"PMD.OnlyOneReturn", "PMD.CognitiveComplexity"})
     public static void main(final String... args) {
-        final String portEnv = setupPort();
+        final String portEnv;
+        try {
+            portEnv = setupPort();
+        } catch (final IllegalArgumentException e) {
+            LOG.error("Startup aborted: {}", e.getMessage());
+            System.exit(1);
+            return;
+        }
 
         staticFileLocation("/public");
 
@@ -108,7 +102,7 @@ public class Yopass {
 
         // Graceful shutdown hook — uses the already-captured reference to avoid
         // accidentally creating a new connection during shutdown.
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> { // NOPMD DoNotUseThreads
             LOG.info("Shutting down Yopass...");
             stop();
             memcached.shutdown();
@@ -238,7 +232,19 @@ public class Yopass {
         // default 4567
         final String portEnv = System.getenv("PORT") != null ? System.getenv("PORT") : System.getenv("YP_PORT");
         if (portEnv != null) {
-            port(Integer.parseInt(portEnv));
+            final int portNumber;
+            try {
+                portNumber = Integer.parseInt(portEnv.trim());
+            } catch (final NumberFormatException e) {
+                LOG.error("Invalid port value '{}': not a valid integer", portEnv);
+                throw new IllegalArgumentException("Invalid port: " + portEnv, e);
+            }
+            if (portNumber < MIN_PORT || portNumber > MAX_PORT) {
+                LOG.error("Port {} out of valid range ({}-{})", portNumber, MIN_PORT, MAX_PORT);
+                throw new IllegalArgumentException(
+                        "Port out of range: " + portNumber + " (must be " + MIN_PORT + "-" + MAX_PORT + ")");
+            }
+            port(portNumber);
         }
         return portEnv;
     }
