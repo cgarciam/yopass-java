@@ -69,18 +69,23 @@ public final class Memcached {
 
     /**
      * Saves a key-value pair to Memcached with a specified lifetime.
+     * Uses {@code add} (not {@code set}) so the operation fails if the key
+     * already exists, preventing silent overwrites on key collision.
      *
      * @param key      the Memcached key
      * @param lifetime the lifetime of the key in seconds
      * @param value    the value to store
-     * @return true if the save operation was successful, false otherwise
+     * @return true if the key was stored successfully, false if it already existed or on error
      */
     public boolean save(final String key, final int lifetime, final String value) {
         try {
-            client.add(key, lifetime, value);
-            return true;
+            final boolean stored = client.add(key, lifetime, value);
+            if (!stored) {
+                LOG.warn("Key collision detected for key prefix '{}'", key.substring(0, 6));
+            }
+            return stored;
         } catch (final Exception e) {
-            LOG.error("Failed to save key '{}' to Memcached", key, e);
+            LOG.error("Failed to save key prefix '{}' to Memcached", key.substring(0, 6), e);
             return false;
         }
     }
@@ -95,7 +100,7 @@ public final class Memcached {
         try {
             return client.get(key);
         } catch (final Exception e) {
-            LOG.error("Failed to get key '{}' from Memcached", key, e);
+            LOG.error("Failed to get key prefix '{}' from Memcached", key.substring(0, 6), e);
             return null;
         }
     }
@@ -128,23 +133,6 @@ public final class Memcached {
         } catch (final Exception e) {
             LOG.error("Failed to getAndDelete key from Memcached", e);
             return null;
-        }
-    }
-
-    /**
-     * Increments a numeric value in Memcached for the given key.
-     * If the key does not exist, it will be created with an initial value of 1.
-     *
-     * @param key the Memcached key
-     * @return true if the increment operation was successful, false otherwise
-     */
-    public boolean increment(final String key) {
-        try {
-            client.incr(key, 43_200, 1);
-            return true;
-        } catch (final Exception e) {
-            LOG.error("Failed to increment key '{}' in Memcached", key, e);
-            return false;
         }
     }
 

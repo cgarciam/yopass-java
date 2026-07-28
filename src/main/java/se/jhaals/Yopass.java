@@ -10,6 +10,7 @@ import spark.Request;
 
 import java.io.UncheckedIOException;
 import java.security.SecureRandom;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -19,8 +20,8 @@ import java.util.Map;
  */
 //@SuppressWarnings({ "PMD.CommentSize", "PMD.OnlyOneReturn", "PMD.GuardLogStatement" })
 public class Yopass {
-    /** Content type for JSON responses. */
-    private static final String APPLICATION_JSON = "application/json";
+    /** Content type for JSON responses with explicit UTF-8 charset. */
+    private static final String APPLICATION_JSON = "application/json;charset=utf-8";
     /** Key used in JSON responses for messages. */
     private static final String MESSAGE = "message";
     /** Logger for Yopass class. */
@@ -49,6 +50,8 @@ public class Yopass {
             "1d",  86_400,
             "1w", 604_800
     );
+    /** Locale used for case-insensitive string comparisons. */
+	private static final Locale LOCALE = Locale.ROOT;
 
     /**
      * Returns the TTL in seconds for a given lifetime string.
@@ -76,15 +79,29 @@ public class Yopass {
     }
 
     /** Main method to start the Yopass server. */
-//    @SuppressWarnings({"PMD.CognitiveComplexity"})
     public static void main(final String... args) {
+        try {
+            startServer();
+        } catch (final IllegalStateException e) {
+            LOG.error("Startup failed: {}", e.getMessage(), e);
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Initializes and starts the Yopass server.
+     * Extracted from {@code main()} so initialization logic can be tested
+     * without triggering {@code System.exit()}.
+     *
+     * @throws IllegalStateException if the server cannot be started (bad port, Memcached unavailable)
+     */
+//    @SuppressWarnings("PMD.CognitiveComplexity") // TODO: refactor into smaller methods
+    private static void startServer() {
         final String portEnv;
         try {
             portEnv = setupPort();
         } catch (final IllegalArgumentException e) {
-            LOG.error("Startup aborted: {}", e.getMessage());
-            System.exit(1);
-            return;
+            throw new IllegalStateException("Invalid port configuration", e);
         }
 
         staticFileLocation("/public");
@@ -96,9 +113,7 @@ public class Yopass {
         try {
             memcached = Memcached.getInstance();
         } catch (final UncheckedIOException e) {
-            LOG.error("Failed to connect to Memcached at startup. Exiting.", e);
-            System.exit(1);
-            return;
+            throw new IllegalStateException("Failed to connect to Memcached", e);
         }
 
         // Global rate limiter (30 requests per minute per IP)
@@ -117,7 +132,6 @@ public class Yopass {
         after((req, res) -> {
             res.header("X-Content-Type-Options", "nosniff");
             res.header("X-Frame-Options", "DENY");
-            res.header("X-XSS-Protection", "1; mode=block");
             res.header("Referrer-Policy", "no-referrer");
             res.header("Content-Security-Policy",
                     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'");
@@ -125,6 +139,9 @@ public class Yopass {
             res.header("Cache-Control", "no-store, no-cache, must-revalidate, private");
             res.header("Pragma", "no-cache");
             res.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+            // CORS: restrict to same-origin only (no cross-origin API access)
+            res.header("Access-Control-Allow-Origin", "");
+            res.header("Cross-Origin-Resource-Policy", "same-origin");
         });
 
         before("/v1/*", (req, res) -> {
@@ -156,9 +173,25 @@ public class Yopass {
 
         // Store a secret (receives already-encrypted ciphertext from the client)
         post("/v1/secret", (request, response) -> {
-            // Body size check (contentLength can be -1 if not sent, so also check actual body)
+            // Validate Content-Type
+            final String contentType = request.contentType();
+            if (contentType == null || !contentType.toLowerCase(LOCALE).startsWith("application/json")) {
+                LOG.warn("Rejected POST with invalid Content-Type '{}' from {}",
+                        contentType, getClientIp(request));
+                halt(415, new JSONObject().put(MESSAGE, "Content-Type must be application/json").toString());
+                return null;
+            }
+
+            // Body size check: reject early if Content-Length exceeds limit (#3-5)
             final int contentLength = request.contentLength();
-            if (contentLength > MAX_BODY_SIZE || (contentLength == -1 && request.body().length() > MAX_BODY_SIZE)) {
+            if (contentLength > MAX_BODY_SIZE) {
+                LOG.warn("Rejected oversized payload ({} bytes) from {}", contentLength, getClientIp(request));
+                halt(413, new JSONObject().put(MESSAGE, "Payload too large").toString());
+                return null;
+            }
+            // If Content-Length is missing, we must read the body to check size
+            if (contentLength == -1 && request.body().length() > MAX_BODY_SIZE) {
+                LOG.warn("Rejected oversized payload (no Content-Length) from {}", getClientIp(request));
                 halt(413, new JSONObject().put(MESSAGE, "Payload too large").toString());
                 return null;
             }
@@ -167,6 +200,7 @@ public class Yopass {
             try {
                 jsonObject = new JSONObject(request.body());
             } catch (JSONException e) {
+                LOG.warn("Rejected malformed JSON from {}", getClientIp(request));
                 halt(400, new JSONObject().put(MESSAGE, "Invalid JSON").toString());
                 return null;
             }
@@ -174,10 +208,12 @@ public class Yopass {
             // Get and validate the encrypted secret (ciphertext from client)
             final String secret = jsonObject.optString("secret", null);
             if (secret == null || secret.isEmpty()) {
+                LOG.warn("Rejected POST with missing secret from {}", getClientIp(request));
                 halt(400, new JSONObject().put(MESSAGE, "Secret is required").toString());
                 return null;
             }
             if (secret.length() > SECRET_MAX_LENGTH) {
+                LOG.warn("Rejected oversized secret ({} chars) from {}", secret.length(), getClientIp(request));
                 halt(400, new JSONObject().put(MESSAGE, "Secret exceeds maximum length of " + SECRET_MAX_LENGTH).toString());
                 return null;
             }
@@ -207,6 +243,8 @@ public class Yopass {
 
             // Validate key format (must be exactly KEY_LENGTH alphanumeric characters)
             if (key == null || key.length() != KEY_LENGTH || !key.matches("^[A-Za-z0-9]+$")) {
+                LOG.warn("Rejected invalid key format (length={}) from {}",
+                        key == null ? 0 : key.length(), getClientIp(request));
                 halt(400, new JSONObject().put(MESSAGE, "Invalid key format").toString());
                 return null;
             }

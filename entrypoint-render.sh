@@ -12,8 +12,18 @@ set -e
 # Start memcached in background (64MB, localhost only, binary protocol)
 memcached -m 64 -I 1m -c 256 -t 2 -u memcached -l 127.0.0.1 -d
 
-# Wait briefly for Memcached to be ready
-sleep 1
+# Wait for Memcached to be ready (up to 10 seconds)
+echo "Waiting for Memcached to be ready..."
+RETRIES=20
+until printf "version\r\n" | nc -w 1 127.0.0.1 11211 > /dev/null 2>&1; do
+  RETRIES=$((RETRIES - 1))
+  if [ "$RETRIES" -le 0 ]; then
+    echo "ERROR: Memcached failed to start within 10 seconds" >&2
+    exit 1
+  fi
+  sleep 0.5
+done
+echo "Memcached is ready."
 
 echo "Starting yopass-java on port ${PORT:-10000}..."
 
