@@ -7,6 +7,7 @@ import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.UncheckedIOException;
 import java.security.SecureRandom;
 import java.util.Map;
 
@@ -93,24 +94,24 @@ public class Yopass {
 
         staticFileLocation("/public");
 
-        // Initialize Memcached connection at startup
+        // Initialize Memcached connection at startup and capture the reference.
+        // All route handlers close over this variable — no further getInstance()
+        // calls (and their volatile reads) are needed on the hot path.
+        final Memcached memcached;
         try {
-            Memcached.getInstance();
-        } catch (final Exception e) {
+            memcached = Memcached.getInstance();
+        } catch (final UncheckedIOException e) {
             LOG.error("Failed to connect to Memcached at startup. Exiting.", e);
             System.exit(1);
             return;
         }
 
-        // Graceful shutdown hook
+        // Graceful shutdown hook — uses the already-captured reference to avoid
+        // accidentally creating a new connection during shutdown.
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("Shutting down Yopass...");
             stop();
-            try {
-                Memcached.getInstance().shutdown();
-            } catch (final Exception ignored) {
-                // Ignore exceptions during shutdown
-            }
+            memcached.shutdown();
         }));
 
         // Security headers for all responses
@@ -141,14 +142,11 @@ public class Yopass {
         // Health check endpoint
         get("/healthz", (req, res) -> {
             res.type(APPLICATION_JSON);
-            try {
-                // Attempt a simple operation to verify connectivity
-                Memcached.getInstance().get("__healthcheck__");
+            if (memcached.isAvailable()) {
                 return new JSONObject().put("status", "ok");
-            } catch (final Exception e) {
-                res.status(503);
-                return new JSONObject().put("status", "unhealthy").put("error", "memcached unavailable");
             }
+            res.status(503);
+            return new JSONObject().put("status", "unhealthy").put("error", "memcached unavailable");
         });
 
         // Global exception handler
@@ -194,7 +192,6 @@ public class Yopass {
             final String key = generateSecureRandom(KEY_LENGTH);
 
             // Store the already-encrypted ciphertext in Memcached
-            final Memcached memcached = Memcached.getInstance();
             if (!memcached.save(key, lifetime, secret)) {
                 response.status(500);
                 return new JSONObject().put(MESSAGE, "Failed to store secret");
@@ -207,7 +204,7 @@ public class Yopass {
                     .put(MESSAGE, "secret stored");
         });
 
-        // Retrieve an encrypted secret (one-time read, then deleted)
+        // Retrieve an encrypted secret (one-time read, then deleted atomically)
         get("/v1/secret/:key", (request, response) -> {
             final String key = request.params(":key");
 
@@ -217,15 +214,14 @@ public class Yopass {
                 return null;
             }
 
-            final Memcached memcached = Memcached.getInstance();
-            final String ciphertext = memcached.get(key);
+            // Atomic get-and-delete: only one concurrent request can claim the secret.
+            // Prevents TOCTOU race where two requests could both read the secret
+            // before either deletes it.
+            final String ciphertext = memcached.getAndDelete(key);
             if (ciphertext == null) {
                 halt(404, new JSONObject().put(MESSAGE, "Secret not found or already consumed").toString());
                 return null;
             }
-
-            // Delete secret after retrieval (one-time secret)
-            memcached.delete(key);
 
             LOG.info("Secret retrieved and deleted, key prefix='{}'", key.substring(0, 6));
 
