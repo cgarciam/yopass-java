@@ -237,6 +237,26 @@ public class Yopass {
                     .put(MESSAGE, "secret stored");
         });
 
+        // Report decryption failure (client-side decryption failed, e.g. wrong key)
+        post("/v1/secret/decryption-failure", (request, response) -> {
+            final JSONObject jsonObject;
+            try {
+                jsonObject = new JSONObject(request.body());
+            } catch (JSONException e) {
+                halt(400, new JSONObject().put(MESSAGE, "Invalid JSON").toString());
+                return null;
+            }
+
+            final String key = jsonObject.optString("key", "");
+            // Only log a safe prefix (first 6 chars) — never log the full storage key
+            final String keyPrefix = key.length() >= 6 ? key.substring(0, 6) : key;
+
+            LOG.warn("Decryption failure reported for key prefix='{}' from {}",
+                    keyPrefix, getClientIp(request));
+
+            return new JSONObject().put(MESSAGE, "Failure recorded");
+        });
+
         // Retrieve an encrypted secret (one-time read, then deleted atomically)
         get("/v1/secret/:key", (request, response) -> {
             final String key = request.params(":key");

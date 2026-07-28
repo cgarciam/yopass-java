@@ -153,9 +153,14 @@ app.controller('ViewController', function($scope, $routeParams, $http) {
             } else if (err?.status) {
                 $scope.errorMessage = true;
             } else {
-                // Decryption failure
+                // Decryption failure — report to server for audit logging
                 $scope.invalidPassword = true;
                 $scope.secret = null;
+                try {
+                    await $http.post('/v1/secret/decryption-failure', { key: key });
+                } catch (reportErr) {
+                    // Best-effort reporting; ignore if it fails
+                }
             }
         }
         $scope.$applyAsync();
