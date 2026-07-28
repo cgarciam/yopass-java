@@ -1,15 +1,18 @@
 package se.jhaals;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import net.rubyeye.xmemcached.MemcachedClient;
 import net.rubyeye.xmemcached.MemcachedClientBuilder;
 import net.rubyeye.xmemcached.XMemcachedClientBuilder;
 import net.rubyeye.xmemcached.command.BinaryCommandFactory;
 import net.rubyeye.xmemcached.utils.AddrUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.IOException;
-import java.io.UncheckedIOException;
 
 /**
  * Singleton Memcached client wrapper.
@@ -146,16 +149,20 @@ public final class Memcached {
     }
 
     /**
-     * Checks whether the Memcached server is reachable.
-     * Unlike {@link #get(String)}, this method does NOT swallow exceptions,
-     * so callers can distinguish "key not found" from "server unreachable".
+     * Checks whether the Memcached server is reachable by sending a
+     * protocol-level {@code VERSION} command.
+     * <p>
+     * Unlike {@link #get(String)} (which returns {@code null} on both
+     * "key not found" and "server error"), this method returns a clear
+     * boolean so callers can distinguish a healthy server from an
+     * unreachable one.
      *
-     * @return true if the server responded, false if it is unreachable
+     * @return true if at least one Memcached node responded, false otherwise
      */
     public boolean isAvailable() {
         try {
-            client.get("__healthcheck__");
-            return true;
+            final Map<InetSocketAddress, String> versions = client.getVersions();
+            return versions != null && !versions.isEmpty();
         } catch (final Exception e) {
             LOG.warn("Memcached availability check failed", e);
             return false;
