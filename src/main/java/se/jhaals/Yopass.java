@@ -100,11 +100,15 @@ public class Yopass {
             return;
         }
 
+        // Global rate limiter (30 requests per minute per IP)
+        final RateLimiter rateLimiter = new RateLimiter();
+
         // Graceful shutdown hook — uses the already-captured reference to avoid
         // accidentally creating a new connection during shutdown.
         Runtime.getRuntime().addShutdownHook(new Thread(() -> { // NOPMD DoNotUseThreads
             LOG.info("Shutting down Yopass...");
             stop();
+            rateLimiter.shutdown();
             memcached.shutdown();
         }));
 
@@ -122,8 +126,6 @@ public class Yopass {
             res.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
         });
 
-        // Global rate limiter (30 requests per minute per IP)
-        final RateLimiter rateLimiter = new RateLimiter();
         before("/v1/*", (req, res) -> {
             if (!rateLimiter.allowRequest(req.ip())) {
                 halt(429, new JSONObject().put(MESSAGE, "Too many requests").toString());
