@@ -85,6 +85,9 @@ const Crypto = (() => {
 })();
 
 app.controller('createController', function($scope, $http) {
+    // Explicitly initialize view state to prevent flash of error div
+    $scope.error = false;
+
     $scope.toggleoptions = function() {
         $scope.options = true;
     };
@@ -133,6 +136,11 @@ app.controller('ViewController', function($scope, $routeParams, $http) {
     // Validate route parameters to prevent injection
     const keyPattern = /^[A-Za-z0-9]+$/;
 
+    // Explicitly initialize view state to prevent flash of error messages
+    $scope.invalidPassword = false;
+    $scope.errorMessage = false;
+    $scope.secret = null;
+
     async function getSecret(key, decryptionKey) {
         if (!keyPattern.test(key)) {
             $scope.errorMessage = true;
@@ -156,8 +164,14 @@ app.controller('ViewController', function($scope, $routeParams, $http) {
                 // Decryption failure — report to server for audit logging
                 $scope.invalidPassword = true;
                 $scope.secret = null;
+                // Use native fetch (fire-and-forget) instead of $http to avoid
+                // AngularJS digest-cycle issues when called from a native Promise rejection.
                 try {
-                    await $http.post('/v1/secret/decryption-failure', { key: key });
+                    fetch('/v1/secret/decryption-failure', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: key })
+                    });
                 } catch (reportErr) {
                     // Best-effort reporting; ignore if it fails
                 }

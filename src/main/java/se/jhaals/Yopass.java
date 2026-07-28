@@ -228,6 +228,7 @@ public class Yopass {
                 try {
                     jsonObject = new JSONObject(ctx.body());
                 } catch (JSONException e) {
+                    LOG.warn("Decryption failure report with invalid JSON from {}", getClientIp(ctx));
                     ctx.status(HttpStatus.BAD_REQUEST)
                        .result(new JSONObject().put(MESSAGE, "Invalid JSON").toString());
                     return;
