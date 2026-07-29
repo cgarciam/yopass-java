@@ -124,7 +124,7 @@ public class Yopass {
                 ctx.header("X-Frame-Options", "DENY");
                 ctx.header("Referrer-Policy", "no-referrer");
                 ctx.header("Content-Security-Policy",
-                        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'");
+                        "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'");
                 ctx.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
                 ctx.header("Cache-Control", "no-store, no-cache, must-revalidate, private");
                 ctx.header("Pragma", "no-cache");
